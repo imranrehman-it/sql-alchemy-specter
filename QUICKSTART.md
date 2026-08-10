@@ -1,6 +1,6 @@
 # Setting up Example API & Generating Benchmarks
 
-Local FastAPI + SQLAlchemy + Postgres harness for developing and demoing `sqlspectre`.
+Local FastAPI + SQLAlchemy + PostgressSQL harness for developing and demoing `sqlspectre`.
 
 **What it provides**
 
@@ -84,5 +84,3 @@ example-api/
     requirements.txt
     .env.example
 ```
-
-Editable install means changes under `src/sqlspectre` reload with the API. `.env` and `spectate/` are gitignored.
