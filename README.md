@@ -24,6 +24,10 @@ Editable local install (while developing):
 pip install -e .
 ```
 
+## Example app
+
+A FastAPI + Postgres harness lives in [`example-api`](./example-api). See that README for what it provides and how to run it.
+
 ## Usage
 
 ```python
