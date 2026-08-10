@@ -1,74 +1,90 @@
-## SQL Alchemy Specter
+# SQL Alchemy Specter
 
-> ⚠️ **Very early / WIP.** Barely past prototype. Things are half-built, names will change, and the recording format is not stable. Don't depend on this yet. If you do, pin to a commit.
+> ⚠️ **Very early / WIP.** Barely past prototype. Things are subject to change, names will change. 
 
-`sqlspectre` records what your SQLAlchemy + ASGI app actually does per request: routes, queries, and connection-pool activity, writing it to disk for later analysis.
+sql-alchemy-specter is a profiling and load-simulation toolkit for the SQLAlchemy API development lifecycle in large, multi-thousand-user monolithic applications.
 
-The goal (mostly not built yet) is to benchmark production-scale request load by replaying realistic traffic against staging, so you can see how an implementation holds up under production-like contention and catch issues before they hit prod.
+SQLAlchemy's ORM is designed to be simple in its nature, a Python API that lets you work with objects instead of SQL. 
 
-Right now it does the recording part. The replay/report side is still being figured out.
+**But** that simplicity hides a multi-layer stack (sessions, query compilation, connection pooling, hydration, serialization, ++) and the cleaner the API looks, the **harder** it gets to spot the real bottleneck at scale.
 
-## What it captures (so far)
+## The problem
 
-Chains every layer of a request together with a unique per-request `fingerprint`:
+A FastAPI + SQLAlchemy service under real traffic isn't one bottleneck — it's a stack of dependent ones:
 
-```
-request  ──fingerprint──┐
-                        │
-├─ Request details      │  method, path, status, total duration
-│                       │  hashed into the fingerprint that links everything below
-│                       │
-├─ Engine pool          │  checkout/checkin events, active connections,
-│    contention/health  │  pool size, overflow → saturation & starvation
-│                       │
-├─ Database             │  each query's SQL, timing, row counts,
-│    transactions       │  tied back to the issuing request
-│                       │
-├─ API request/response │  time in application code vs. database,
-│    processing         │  showing where each request spends its time
-│                       │
-└─ Summary timeseries   │  activity aggregated over time: how load,
-                        ┘  latency, and contention evolve across a session
-```
+- **Request shape** — which endpoints, with which params, in which order
+- **App time** — Python / serialization / business logic between DB calls
+- **Pool health** — checkout waits, saturation, overflow
+- **Query cost** — what SQL actually ran, how long, how often
+- **Interaction effects** — the same endpoint that looks fine alone falls apart when 200 other requests are fighting for connections
 
-Everything joins on `fingerprint`, so a request can be traced end to end from the HTTP call down to the queries and pool events it triggered.
+>Alchemy Specter captures the linked request chain so you can reproduce production-like load, attribute latency across the full multi-layer path where non-trivial bottlenecks emerge, and close the development loop — change, benchmark, validate against a baseline, and ship with confidence.
 
-## Status
+## How it works
 
-- [x] Per-request recording (routes, queries, pool) to disk
-- [x] Cross-layer `fingerprint` correlation
-- [ ] Load replay against staging
-- [ ] HTML report / analysis
-- [ ] Write-traffic handling
-- [ ] Stable recording format
+One line of `attach`. While traffic runs, Spectre buffers events off the hot path and flushes flat NDJSON files under `./spectate`.
 
-**Dependencies**
-- Python ≥ 3.10
-- SQLAlchemy ≥ 2.0
-- An ASGI app with `add_middleware` (FastAPI / Starlette)
-
-**Install**
-```bash
-pip install git+https://github.com/imranrehman-it/sql-alchemy-specter
-```
-
-For local development:
-```bash
-pip install -e .
-```
-
-Add one line where you build your engine and app:
 ```python
-import os
-import sqlspectre
-from sqlalchemy import create_engine
-from fastapi import FastAPI
-
 engine = create_engine(DATABASE_URL)
 app = FastAPI()
-
-# The only line you add:
 spectre = sqlspectre.attach(app, engine, output="./spectate", enabled=os.getenv("SPECTRE") == "1")
 ```
 
-Adjust the checkboxes in **Status** to match what's actually working — I guessed at the split based on our earlier conversation.
+## Key features
+
+| Feature | What it does | Why it matters |
+|---|---|---|
+| **One-line attach** | Wraps your ASGI app + SQLAlchemy engine in a single call | No code changes beyond one line; drop in and out freely |
+| **Cross-layer instrumentation & recording** | Watches each API request and emits segmented, layer-based records (route → query → pool) in a relational pattern | Clear joins across layers; trace one request end to end or aggregate across thousands |
+| **Recording, playback & historical simulation** *(historical sim soon)* | Replay production loads, tweak values to stress-test, or generate your own recordings and run dev performance tests — stored as `runs` for continuous benchmarking | Validate a change against a baseline before it ships |
+| **Near-zero overhead** | Events buffer off the hot path and flush to disk in batches; fail-open and zero-cost when disabled | Recording doesn't distort the timings it measures, and never breaks a request |
+| **Production-faithful playback** | Auto-spins pool / thread / connection concurrency during replay to mirror the real server | Reproduces genuine contention (pool starvation, queueing), not a model of it |
+| **Visualization & HTML reports** | Per-endpoint evaluation with run-time percentiles, longest requests, query breakdowns, and more | See which endpoints degrade and *why*, in one self-contained file |
+| **Multi-engine** | `engine_id` stamped on every event | Read/write splits, replicas, and analytics pools stay separable |
+| **Flat NDJSON facts** | Fixed-column files linked by id | Clean joins and direct ETL / OLAP loads, no nested parsing |
+## What the recordings give you
+
+
+```text
+spectate/
+┌──────────────────┐
+│ recording        │  1 row / request
+│ request_id (PK)  │  method, path, status, user, session, ts
+└────────┬─────────┘
+         │ request_id
+    ┌────┴────┬──────────────┬────────────────┐
+    ▼         ▼              ▼                ▼
+┌────────┐ ┌────────┐ ┌────────────┐ ┌────────────────┐
+│request_│ │ routes │ │  queries   │ │ pool_lifecycle │
+│params  │ │        │ │            │ │                │
+│        │ │timing  │ │query_id PK │ │event_id PK     │
+│1 row / │ │only    │ │sql, ms,    │ │checkout→query  │
+│param   │ │        │ │sql_shape   │ │→checkin        │
+└────────┘ └────────┘ └─────┬──────┘ └───────┬────────┘
+                            │ query_id       │
+                            └────────┬───────┘
+                                     ▼
+                            ┌────────────────┐
+                            │ pool_summary   │
+                            │ 1 row /        │
+                            │ request×engine │
+                            └────────────────┘
+
+Join keys
+  request_id  → ties all files to one HTTP request
+  query_id    → ties queries ↔ pool_lifecycle (query stages)
+  event_id    → unique pool_lifecycle row
+  engine      → which DB engine (multi-engine safe)
+```
+
+| File | Grain | What's in it |
+|---|---|---|
+| `recording` | request | method, path, status, hashed user/session, ts — the lean tape for replay |
+| `request_params` | param | query / path / body keys as normalized rows (replay inputs, ETL-friendly) |
+| `routes` | request | total vs process vs db vs response timing — where time actually went |
+| `queries` | query | `sql`, `sql_shape`, ms, rows — joined back via `request_id` + `query_id` |
+| `pool_lifecycle` | pool event | checkout → query(+) → checkin stages, with time per stage |
+| `pool_summary` | request × engine | cumulative pool rollup |
+
+Pool lifecycle is the fun one for contention: you can literally see time sitting in checkout/hold vs execute when the pool starts starving.
+
