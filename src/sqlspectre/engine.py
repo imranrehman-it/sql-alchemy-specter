@@ -10,8 +10,8 @@ from sqlalchemy import event
 
 from sqlspectre.context import req_state_var, request_id_var
 from sqlspectre.recorder import Recorder
+from sqlspectre.rows import pool_lifecycle, queries
 from sqlspectre.util import (
-    lifecycle_row,
     new_id,
     pool_cols,
     resolve_engine_id,
@@ -83,28 +83,29 @@ def instrument_engine(
             ts = round(time.time(), 3)
             recorder.emit(
                 "queries",
-                {
-                    "query_id": query_id,
-                    "request_id": request_id,
-                    "engine": eid,
-                    "ts": ts,
-                    "t_ms": t_ms,
-                    "ms": ms,
-                    "sql_shape": sql_shape(statement),
-                    "sql": sql_compact(statement),
-                    "rows": rows,
-                },
+                queries(
+                    query_id=query_id,
+                    request_id=request_id,
+                    engine=eid,
+                    ts=ts,
+                    t_ms=t_ms,
+                    ms=ms,
+                    sql_shape=sql_shape(statement),
+                    sql=sql_compact(statement),
+                    rows=rows,
+                ),
             )
             recorder.emit(
                 "pool_lifecycle",
-                lifecycle_row(
+                pool_lifecycle(
+                    event_id=new_id(10),
                     request_id=request_id,
                     engine=eid,
                     event="query",
-                    t_ms=t_ms,
-                    time_spent=ms,
-                    query_id=query_id,
                     ts=ts,
+                    t_ms=t_ms,
+                    query_id=query_id,
+                    time_spent=ms,
                 ),
             )
         except Exception:
@@ -128,13 +129,15 @@ def instrument_engine(
                 t_ms = round((now - state.t0) * 1000, 3)
             recorder.emit(
                 "pool_lifecycle",
-                lifecycle_row(
+                pool_lifecycle(
+                    event_id=new_id(10),
                     request_id=request_id,
                     engine=eid,
                     event="checkout",
+                    ts=round(time.time(), 3),
                     t_ms=t_ms,
-                    time_spent=wait_ms,  # pool wait
-                    pool=pool_cols(engine.pool),
+                    time_spent=wait_ms,
+                    **pool_cols(engine.pool),
                 ),
             )
         except Exception:
@@ -156,13 +159,15 @@ def instrument_engine(
                 t_ms = round((now - state.t0) * 1000, 3)
             recorder.emit(
                 "pool_lifecycle",
-                lifecycle_row(
+                pool_lifecycle(
+                    event_id=new_id(10),
                     request_id=request_id,
                     engine=eid,
                     event="checkin",
+                    ts=round(time.time(), 3),
                     t_ms=t_ms,
-                    time_spent=hold_ms,  # time held
-                    pool=pool_cols(engine.pool),
+                    time_spent=hold_ms,
+                    **pool_cols(engine.pool),
                 ),
             )
         except Exception:

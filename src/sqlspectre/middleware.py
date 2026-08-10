@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Callable
+from typing import Callable
 
 from sqlspectre.context import ReqState, req_state_var, request_id_var
 from sqlspectre.extract import (
@@ -18,6 +18,7 @@ from sqlspectre.extract import (
     session_id,
 )
 from sqlspectre.recorder import Recorder
+from sqlspectre.rows import pool_summary, recording, request_params, routes
 from sqlspectre.util import new_id
 
 
@@ -115,53 +116,54 @@ class Middleware:
         cook = cookies(hdrs.get("cookie", ""))
         body = parse_body(body_bytes, hdrs.get("content-type", ""))
         ts = round(time_call, 3)
+        total_ms_r = round(total_ms, 3)
 
         self.recorder.emit(
             "recording",
-            {
-                "request_id": request_id,
-                "ts": ts,
-                "method": scope.get("method"),
-                "path": path,
-                "status": status,
-                "user_id": find_user_id(hdrs, cook, query, path_params),
-                "session": session_id(hdrs, cook),
-            },
+            recording(
+                request_id=request_id,
+                ts=ts,
+                method=scope.get("method"),
+                path=path,
+                status=status,
+                user_id=find_user_id(hdrs, cook, query, path_params),
+                session=session_id(hdrs, cook),
+            ),
         )
         for source, key, value in iter_params(query, path_params, body):
             self.recorder.emit(
                 "request_params",
-                {
-                    "request_id": request_id,
-                    "source": source,
-                    "key": key,
-                    "value": value,
-                },
+                request_params(
+                    request_id=request_id,
+                    source=source,
+                    key=key,
+                    value=value,
+                ),
             )
         self.recorder.emit(
             "routes",
-            {
-                "request_id": request_id,
-                "ts": ts,
-                "total_ms": round(total_ms, 3),
-                "process_ms": round(process_ms, 3),
-                "db_ms": round(state.db_ms, 3),
-                "response_ms": round(response_ms, 3),
-                "query_count": state.query_count,
-            },
+            routes(
+                request_id=request_id,
+                ts=ts,
+                total_ms=total_ms_r,
+                process_ms=round(process_ms, 3),
+                db_ms=round(state.db_ms, 3),
+                response_ms=round(response_ms, 3),
+                query_count=state.query_count,
+            ),
         )
         for eng, stats in state.engines.items():
             self.recorder.emit(
                 "pool_summary",
-                {
-                    "request_id": request_id,
-                    "engine": eng,
-                    "ts": ts,
-                    "checkouts": stats.checkouts,
-                    "queries": stats.queries,
-                    "query_ms": round(stats.query_ms, 3),
-                    "wait_ms": round(stats.wait_ms, 3),
-                    "hold_ms": round(stats.hold_ms, 3),
-                    "total_ms": round(total_ms, 3),
-                },
+                pool_summary(
+                    request_id=request_id,
+                    engine=eng,
+                    ts=ts,
+                    checkouts=stats.checkouts,
+                    queries=stats.queries,
+                    query_ms=round(stats.query_ms, 3),
+                    wait_ms=round(stats.wait_ms, 3),
+                    hold_ms=round(stats.hold_ms, 3),
+                    total_ms=total_ms_r,
+                ),
             )
