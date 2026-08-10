@@ -14,7 +14,23 @@ from sqlspectre.recorder import Recorder
 _fp: contextvars.ContextVar[str | None] = contextvars.ContextVar("sqlspectre_fp", default=None)
 
 
-def instrument_engine(engine: Any, recorder: Recorder) -> None:
+def resolve_engine_id(engine: Any, engine_id: str | None = None) -> str:
+    if engine_id:
+        return engine_id
+    try:
+        return engine.url.render_as_string(hide_password=True)
+    except Exception:
+        return f"engine-{id(engine):x}"
+
+
+def instrument_engine(
+    engine: Any,
+    recorder: Recorder,
+    engine_id: str | None = None,
+) -> str:
+    """Hook query + pool events on one engine. Returns the resolved engine_id."""
+    eid = resolve_engine_id(engine, engine_id)
+
     def before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
         try:
             conn.info["sqlspectre_t0"] = time.perf_counter()
@@ -31,9 +47,10 @@ def instrument_engine(engine: Any, recorder: Recorder) -> None:
             recorder.emit_query(
                 {
                     "fingerprint": fp,
+                    "engine_id": eid,
                     "ts": time.time(),
                     "duration_ms": round((time.perf_counter() - t0) * 1000, 3) if t0 else None,
-                    "sql": sqlparse.format(statement, reindent=True),
+                    "sql": statement,
                     "rows": cursor.rowcount,
                 }
             )
@@ -41,7 +58,7 @@ def instrument_engine(engine: Any, recorder: Recorder) -> None:
             pass
 
     def pool_event(kind: str):
-        def _handler(*_args): 
+        def _handler(*_args):
             try:
                 fp = _fp.get()
                 if not fp:
@@ -50,6 +67,7 @@ def instrument_engine(engine: Any, recorder: Recorder) -> None:
                 recorder.emit_engine(
                     {
                         "fingerprint": fp,
+                        "engine_id": eid,
                         "ts": time.time(),
                         "event": kind,
                         "checked_out": pool.checkedout(),
@@ -67,6 +85,7 @@ def instrument_engine(engine: Any, recorder: Recorder) -> None:
     event.listen(engine, "after_cursor_execute", after_cursor_execute)
     event.listen(engine.pool, "checkout", pool_event("checkout"))
     event.listen(engine.pool, "checkin", pool_event("checkin"))
+    return eid
 
 
 class Middleware:
