@@ -11,6 +11,7 @@ class EngineStats:
     checkouts: int = 0
     queries: int = 0
     query_ms: float = 0.0
+    wait_ms: float = 0.0
     hold_ms: float = 0.0
 
 

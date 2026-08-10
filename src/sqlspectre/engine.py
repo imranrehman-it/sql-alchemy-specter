@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import time
 from typing import Any
 
@@ -18,6 +19,27 @@ from sqlspectre.util import (
     sql_shape,
 )
 
+# last wait from pool._do_get → consumed on checkout
+_pool_wait_ms: contextvars.ContextVar[float | None] = contextvars.ContextVar(
+    "sqlspectre_pool_wait_ms", default=None
+)
+
+
+def _patch_pool_wait(pool: Any) -> None:
+    if getattr(pool, "_sqlspectre_wait_patched", False):
+        return
+    orig = pool._do_get
+
+    def _do_get():
+        t0 = time.perf_counter()
+        try:
+            return orig()
+        finally:
+            _pool_wait_ms.set(round((time.perf_counter() - t0) * 1000, 3))
+
+    pool._do_get = _do_get
+    pool._sqlspectre_wait_patched = True
+
 
 def instrument_engine(
     engine: Any,
@@ -25,6 +47,7 @@ def instrument_engine(
     engine_id: str | None = None,
 ) -> str:
     eid = resolve_engine_id(engine, engine_id)
+    _patch_pool_wait(engine.pool)
 
     def before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
         try:
@@ -93,11 +116,15 @@ def instrument_engine(
             if not request_id:
                 return
             now = time.perf_counter()
+            wait_ms = _pool_wait_ms.get()
+            _pool_wait_ms.set(None)
             connection_record.info["sqlspectre_checkout_t0"] = now
             state = req_state_var.get()
             t_ms = None
             if state is not None:
                 state.for_engine(eid).checkouts += 1
+                if wait_ms is not None:
+                    state.for_engine(eid).wait_ms += wait_ms
                 t_ms = round((now - state.t0) * 1000, 3)
             recorder.emit(
                 "pool_lifecycle",
@@ -106,6 +133,7 @@ def instrument_engine(
                     engine=eid,
                     event="checkout",
                     t_ms=t_ms,
+                    time_spent=wait_ms,  # pool wait
                     pool=pool_cols(engine.pool),
                 ),
             )
@@ -133,7 +161,7 @@ def instrument_engine(
                     engine=eid,
                     event="checkin",
                     t_ms=t_ms,
-                    time_spent=hold_ms,
+                    time_spent=hold_ms,  # time held
                     pool=pool_cols(engine.pool),
                 ),
             )

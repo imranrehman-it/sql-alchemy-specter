@@ -160,6 +160,7 @@ class Middleware:
                     "checkouts": stats.checkouts,
                     "queries": stats.queries,
                     "query_ms": round(stats.query_ms, 3),
+                    "wait_ms": round(stats.wait_ms, 3),
                     "hold_ms": round(stats.hold_ms, 3),
                     "total_ms": round(total_ms, 3),
                 },
