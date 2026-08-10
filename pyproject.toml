@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sqlspectre"
+version = "0.1.0"
+description = "Profile SQLAlchemy ASGI APIs — record routes, queries, and pool activity"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["sqlalchemy>=2.0"]
+
+[project.optional-dependencies]
+replay = ["httpx", "anyio"]
+report = ["numpy", "jinja2"]
+all = ["httpx", "anyio", "numpy", "jinja2"]
+
+[project.scripts]
+sqlspectre = "sqlspectre.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
