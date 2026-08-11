@@ -23,12 +23,23 @@ sqlspectre.configure(
     output=os.path.join(os.path.dirname(__file__), "sqlspectre_output"),
     output_format="csv",
 )
-sqlspectre.attach(app, engine)
+
+spectre = sqlspectre.attach(app, engine)
 
 
 
 def _hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
+
+@app.get("/start-recording")
+def start_recording():
+    spectre.start()
+    return {"message": "Recording Started"}
+
+@app.get("/pause-recording")
+def pause_recording():
+    spectre.pause()
+    return {"message": "Recording Paused"}
 
 
 @app.get("/health")

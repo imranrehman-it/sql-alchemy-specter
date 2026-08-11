@@ -22,6 +22,15 @@ class SpectreHandle:
         eid = instrument_engine(engine, self.recorder, engine_id=engine_id)
         self.engines[eid] = engine
         return eid
+    
+    def start(self) -> None:
+        if self.recorder is not None:
+            self.recorder.start()
+    
+    def pause(self) -> None:
+        if self.recorder is not None:
+            self.recorder.pause()
+            
 
     def close(self) -> None:
         if self.recorder is not None:
@@ -50,6 +59,9 @@ def attach(
     # attach kwargs override configure() defaults
     out = s.output if output is None else output
     on = s.enabled if enabled is None else enabled
+    output_format = s.output_format
+    max_buffer = s.max_buffer
+    flush_interval = s.flush_interval
     if not on:
         return SpectreHandle(None)
 
@@ -59,10 +71,12 @@ def attach(
 
     recorder = Recorder(
         output=out,
-        flush_interval=s.flush_interval,
-        max_buffer=s.max_buffer,
-        output_format=s.output_format,
+        flush_interval=flush_interval,
+        max_buffer=max_buffer,
+        output_format=output_format,
+        
     )
+    
     handle = SpectreHandle(recorder)
     for explicit_id, eng in pairs:
         handle.instrument(eng, engine_id=explicit_id)

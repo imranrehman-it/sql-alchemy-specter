@@ -35,6 +35,7 @@ class Recorder:
         self.max_buffer = max_buffer
         self.output_format = output_format
         ext = "csv" if output_format == "csv" else "ndjson"
+        self._active = False
         self._files = {name: self.output / f"{name}.{ext}" for name in EVENT_FILES}
         self._headers_written: set[str] = set()
         self._buf: list[tuple[str, dict[str, Any]]] = []
@@ -47,21 +48,12 @@ class Recorder:
         self._thread.start()
         atexit.register(self.close)
 
-    ##start and stop the recorder thread
-    def _stop_recorder(self) -> None:
-        self._stop.set()
-        self._thread.join(timeout=self.flush_interval + 2)
-        self._flush()
-        
-    ##start the recorder thread
-    def _start_recorder(self) -> None:
-        self._thread = threading.Thread(
-            target=self._loop, name="sqlspectre-recorder", daemon=True
-        )
-        self._thread.start()
-    
 
     def emit(self, kind: str, event: dict[str, Any]) -> None:
+
+        if not self._active:
+            return
+
         try:
             with self._lock:
                 if len(self._buf) >= self.max_buffer:
@@ -69,6 +61,17 @@ class Recorder:
                 self._buf.append((kind, event))
         except Exception:
             pass
+    
+    def start(self) -> None:
+        if self._active:
+            return
+        self._active = True
+
+    def pause(self) -> None:
+        if not self._active:
+            return
+        self._active = False
+        self._flush()
 
     def _loop(self) -> None:
         while not self._stop.wait(self.flush_interval):
@@ -128,6 +131,10 @@ class Recorder:
                         )
             except Exception:
                 pass
+
+    
+
+
 
     def close(self) -> None:
         if self._closed:
