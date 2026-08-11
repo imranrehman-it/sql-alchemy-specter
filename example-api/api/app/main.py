@@ -19,7 +19,12 @@ from app.schemas import (
 
 app = FastAPI(title="sqlspectre example-api")
 
+sqlspectre.configure(
+    output=os.path.join(os.path.dirname(__file__), "sqlspectre_output"),
+    output_format="csv",
+)
 sqlspectre.attach(app, engine)
+
 
 
 def _hash_password(password: str) -> str:
