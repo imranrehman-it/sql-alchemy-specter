@@ -1,3 +1,13 @@
+# August 2026
+
+```text
+august/
+├── [2026-08-10](#2026-08-10) — init, multi-engine, flat log structure, example API
+└── [2026-08-11](#2026-08-11) — rows.py, response instruments, config, recording lifecycle
+```
+
+---
+
 # 2026-08-10
 
 ## Init + Multi Engine
@@ -9,8 +19,6 @@
 - Multi-engine monitoring with `engine_id` on query/pool events (`feat/statistic` → merged)
 - Fail-open hot path: recorder errors never break requests
 - Correlated HTTP + SQL activity via per-request `fingerprint`
-
-
 
 ## Record + structure
 
@@ -42,7 +50,7 @@
 
   - reason: reconstruct checkout → query → checkin order
 
-- Short engine ids `postgresql/spectre`), hashed sessions, compact SQL + `sql_shape`
+- Short engine ids (`postgresql/spectre`), hashed sessions, compact SQL + `sql_shape`
 
   - reason: cut log size and avoid leaking secrets
 
@@ -82,11 +90,6 @@ Join keys
   engine      → which DB engine (multi-engine safe)
 ```
 
-Drop-in for the PR under **Highlights**:
-
-```markdown
-## Log structure
-
 ```text
 recording (request_id)
     ├── request_params     (request_id)          # replay inputs
@@ -95,6 +98,58 @@ recording (request_id)
     ├── pool_lifecycle     (request_id, query_id on query stages)
     └── pool_summary       (request_id, engine)  # cumulative rollup
 ```
-```
 
 ## Added example API + readme.
+
+---
+
+# 2026-08-11
+
+## Central log shapes (`rows.py`)
+
+- Moved all log row formatting into one place
+- Each file (recording, queries, routes, etc.) has a single builder instead of dicts scattered across middleware/engine
+- Makes it way easier to keep columns consistent when we add or tweak fields
+
+## Response instruments
+
+- Started measuring how long the response side actually takes
+- Tracks:
+  - `build_ms` — building the payload
+  - `encode_ms` — JSON encoding
+  - `send_ms` — shipping it over ASGI
+  - `response_bytes` — body size
+- New files: `response_size` + `response_timing`
+- Also added pool wait timing so we can spot checkout bottlenecks
+- Heads up: JSON responses only for now — streams can log a bit early on the first chunk
+
+## Config (csv / ndjson for now)
+
+- Added `configure()` + `Settings` so you can pick:
+  - output dir
+  - `csv` or `ndjson`
+  - enabled on/off
+  - flush interval + max buffer
+- File logs are temporary — next up is swapping this for queue-based inserts into a DB
+- Example API already uses `configure(...)` before `attach()`
+
+## Recording lifecycle
+
+- Recordings are real sessions now, not just a boolean
+- Core calls on the handle / recorder:
+  - `start()` — new recording (or resume if paused); errors if already running
+  - `pause()` — stop collecting, keep the same recording id
+  - `stop()` — end it, stamp `ended_at`, return the details
+  - `details()` — peek at current / last recording
+- Each recording gets an `id` + `started_at`
+- After stop, the next `start()` kicks off a fresh recording
+- Output goes into a per-session folder: `{id}_{YYYY-MM-DD}/` with a `meta.json`
+
+```text
+start → running → pause → (start resumes) → stop → start again = new id
+```
+
+## Example API
+
+- Wired up endpoints for the above: `/start-recording`, `/pause-recording`, `/stop-recording`, `/recording`
+- Start returns 409 if a recording is already going
