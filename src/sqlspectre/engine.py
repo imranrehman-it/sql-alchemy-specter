@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import time
 from typing import Any
 
@@ -9,14 +10,35 @@ from sqlalchemy import event
 
 from sqlspectre.context import req_state_var, request_id_var
 from sqlspectre.recorder import Recorder
+from sqlspectre.rows import pool_lifecycle, queries
 from sqlspectre.util import (
-    lifecycle_row,
     new_id,
     pool_cols,
     resolve_engine_id,
     sql_compact,
     sql_shape,
 )
+
+# last wait from pool._do_get → consumed on checkout
+_pool_wait_ms: contextvars.ContextVar[float | None] = contextvars.ContextVar(
+    "sqlspectre_pool_wait_ms", default=None
+)
+
+
+def _patch_pool_wait(pool: Any) -> None:
+    if getattr(pool, "_sqlspectre_wait_patched", False):
+        return
+    orig = pool._do_get
+
+    def _do_get():
+        t0 = time.perf_counter()
+        try:
+            return orig()
+        finally:
+            _pool_wait_ms.set(round((time.perf_counter() - t0) * 1000, 3))
+
+    pool._do_get = _do_get
+    pool._sqlspectre_wait_patched = True
 
 
 def instrument_engine(
@@ -25,6 +47,7 @@ def instrument_engine(
     engine_id: str | None = None,
 ) -> str:
     eid = resolve_engine_id(engine, engine_id)
+    _patch_pool_wait(engine.pool)
 
     def before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
         try:
@@ -60,28 +83,29 @@ def instrument_engine(
             ts = round(time.time(), 3)
             recorder.emit(
                 "queries",
-                {
-                    "query_id": query_id,
-                    "request_id": request_id,
-                    "engine": eid,
-                    "ts": ts,
-                    "t_ms": t_ms,
-                    "ms": ms,
-                    "sql_shape": sql_shape(statement),
-                    "sql": sql_compact(statement),
-                    "rows": rows,
-                },
+                queries(
+                    query_id=query_id,
+                    request_id=request_id,
+                    engine=eid,
+                    ts=ts,
+                    t_ms=t_ms,
+                    ms=ms,
+                    sql_shape=sql_shape(statement),
+                    sql=sql_compact(statement),
+                    rows=rows,
+                ),
             )
             recorder.emit(
                 "pool_lifecycle",
-                lifecycle_row(
+                pool_lifecycle(
+                    event_id=new_id(10),
                     request_id=request_id,
                     engine=eid,
                     event="query",
-                    t_ms=t_ms,
-                    time_spent=ms,
-                    query_id=query_id,
                     ts=ts,
+                    t_ms=t_ms,
+                    query_id=query_id,
+                    time_spent=ms,
                 ),
             )
         except Exception:
@@ -93,20 +117,27 @@ def instrument_engine(
             if not request_id:
                 return
             now = time.perf_counter()
+            wait_ms = _pool_wait_ms.get()
+            _pool_wait_ms.set(None)
             connection_record.info["sqlspectre_checkout_t0"] = now
             state = req_state_var.get()
             t_ms = None
             if state is not None:
                 state.for_engine(eid).checkouts += 1
+                if wait_ms is not None:
+                    state.for_engine(eid).wait_ms += wait_ms
                 t_ms = round((now - state.t0) * 1000, 3)
             recorder.emit(
                 "pool_lifecycle",
-                lifecycle_row(
+                pool_lifecycle(
+                    event_id=new_id(10),
                     request_id=request_id,
                     engine=eid,
                     event="checkout",
+                    ts=round(time.time(), 3),
                     t_ms=t_ms,
-                    pool=pool_cols(engine.pool),
+                    time_spent=wait_ms,
+                    **pool_cols(engine.pool),
                 ),
             )
         except Exception:
@@ -128,13 +159,15 @@ def instrument_engine(
                 t_ms = round((now - state.t0) * 1000, 3)
             recorder.emit(
                 "pool_lifecycle",
-                lifecycle_row(
+                pool_lifecycle(
+                    event_id=new_id(10),
                     request_id=request_id,
                     engine=eid,
                     event="checkin",
+                    ts=round(time.time(), 3),
                     t_ms=t_ms,
                     time_spent=hold_ms,
-                    pool=pool_cols(engine.pool),
+                    **pool_cols(engine.pool),
                 ),
             )
         except Exception:

@@ -11,6 +11,7 @@ class EngineStats:
     checkouts: int = 0
     queries: int = 0
     query_ms: float = 0.0
+    wait_ms: float = 0.0
     hold_ms: float = 0.0
 
 
@@ -18,6 +19,7 @@ class EngineStats:
 class ReqState:
     t0: float
     db_ms: float = 0.0
+    encode_ms: float = 0.0
     query_count: int = 0
     engines: dict[str, EngineStats] = field(default_factory=dict)
 

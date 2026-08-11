@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import re
-import time
 import uuid
 from typing import Any
 
@@ -51,33 +50,3 @@ def pool_cols(pool: Any) -> dict[str, Any]:
         except Exception:
             pass
     return cols
-
-
-def lifecycle_row(
-    *,
-    request_id: str,
-    engine: str,
-    event: str,
-    t_ms: float | None,
-    time_spent: float | None = None,
-    query_id: str | None = None,
-    pool: dict[str, Any] | None = None,
-    ts: float | None = None,
-) -> dict[str, Any]:
-    row = {
-        "event_id": new_id(10),
-        "request_id": request_id,
-        "query_id": query_id,
-        "engine": engine,
-        "event": event,
-        "ts": round(ts if ts is not None else time.time(), 3),
-        "t_ms": t_ms,
-        "time_spent": time_spent,
-        "pool_out": None,
-        "pool_idle": None,
-        "pool_size": None,
-        "pool_overflow": None,
-    }
-    if pool:
-        row.update(pool)
-    return row

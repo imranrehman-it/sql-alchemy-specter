@@ -38,8 +38,8 @@ spectre = sqlspectre.attach(app, engine, output="./spectate", enabled=os.getenv(
 | **Cross-layer instrumentation & recording** | Watches each API request and emits segmented, layer-based records (route → query → pool) in a relational pattern | Clear joins across layers; trace one request end to end or aggregate across thousands |
 | **Recording, playback & historical simulation** *(historical sim soon)* | Replay production loads, tweak values to stress-test, or generate your own recordings and run dev performance tests — stored as `runs` for continuous benchmarking | Validate a change against a baseline before it ships |
 | **Near-zero overhead** | Events buffer off the hot path and flush to disk in batches; fail-open and zero-cost when disabled | Recording doesn't distort the timings it measures, and never breaks a request |
-| **Production-faithful playback** | Auto-spins pool / thread / connection concurrency during replay to mirror the real server | Reproduces genuine contention (pool starvation, queueing), not a model of it |
-| **Visualization & HTML reports** | Per-endpoint evaluation with run-time percentiles, longest requests, query breakdowns, and more | See which endpoints degrade and *why*, in one self-contained file |
+| **Production-faithful playback** *(Inprogresss)*| Auto-spins pool / thread / connection concurrency during replay to mirror the real server | Reproduces genuine contention (pool starvation, queueing), not a model of it |
+| **Visualization & HTML reports** *(Inprogresss)*|| Per-endpoint evaluation with run-time percentiles, longest requests, query breakdowns, and more | See which endpoints degrade and *why*, in one self-contained file |
 | **Multi-engine** | `engine_id` stamped on every event | Read/write splits, replicas, and analytics pools stay separable |
 | **Flat NDJSON facts** | Fixed-column files linked by id | Clean joins and direct ETL / OLAP loads, no nested parsing |
 ## What the recordings give you
@@ -52,23 +52,27 @@ spectate/
 │ request_id (PK)  │  method, path, status, user, session, ts
 └────────┬─────────┘
          │ request_id
-    ┌────┴────┬──────────────┬────────────────┐
-    ▼         ▼              ▼                ▼
-┌────────┐ ┌────────┐ ┌────────────┐ ┌────────────────┐
-│request_│ │ routes │ │  queries   │ │ pool_lifecycle │
-│params  │ │        │ │            │ │                │
-│        │ │timing  │ │query_id PK │ │event_id PK     │
-│1 row / │ │only    │ │sql, ms,    │ │checkout→query  │
-│param   │ │        │ │sql_shape   │ │→checkin        │
-└────────┘ └────────┘ └─────┬──────┘ └───────┬────────┘
-                            │ query_id       │
-                            └────────┬───────┘
-                                     ▼
-                            ┌────────────────┐
-                            │ pool_summary   │
-                            │ 1 row /        │
-                            │ request×engine │
+    ┌────┴────┬──────────────┬────────────────┬─────────────────┐
+    ▼         ▼              ▼                ▼                 ▼
+┌────────┐ ┌────────┐ ┌────────────┐ ┌────────────────┐ ┌───────────────┐
+│request_│ │ routes │ │  queries   │ │ pool_lifecycle │ │ response_*    │
+│params  │ │        │ │            │ │                │ │               │
+│        │ │timing  │ │query_id PK │ │event_id PK     │ │size + timing  │
+│1 row / │ │only    │ │sql, ms,    │ │checkout→query  │ │1 row each /   │
+│param   │ │        │ │sql_shape   │ │→checkin        │ │request        │
+└────────┘ └────────┘ └─────┬──────┘ └───────┬────────┘ └───────┬───────┘
+                            │ query_id       │                  │
+                            └────────┬───────┘                  │
+                                     ▼                          │
+                            ┌────────────────┐                  │
+                            │ pool_summary   │◄─────────────────┘
+                            │ 1 row /        │   (also joins on
+                            │ request×engine │    request_id only)
                             └────────────────┘
+
+response_* files
+  response_size    → request_id, response_bytes
+  response_timing  → request_id, build_ms, encode_ms, send_ms
 
 Join keys
   request_id  → ties all files to one HTTP request
@@ -82,6 +86,8 @@ Join keys
 | `recording` | request | method, path, status, hashed user/session, ts — the lean tape for replay |
 | `request_params` | param | query / path / body keys as normalized rows (replay inputs, ETL-friendly) |
 | `routes` | request | total vs process vs db vs response timing — where time actually went |
+| `response_size` | request | `response_bytes` — payload size on the wire |
+| `response_timing` | request | `build_ms`, `encode_ms`, `send_ms` — assemble → JSON encode → ASGI send |
 | `queries` | query | `sql`, `sql_shape`, ms, rows — joined back via `request_id` + `query_id` |
 | `pool_lifecycle` | pool event | checkout → query(+) → checkin stages, with time per stage |
 | `pool_summary` | request × engine | cumulative pool rollup |
