@@ -26,20 +26,42 @@ sqlspectre.configure(
 
 spectre = sqlspectre.attach(app, engine)
 
-
-
 def _hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
 @app.get("/start-recording")
 def start_recording():
-    spectre.start()
-    return {"message": "Recording Started"}
+    if spectre.get_recorder() is None:
+        return {"message": "No recorder found"}
+    try:
+        recording = spectre.start()
+    except RuntimeError as e:
+        raise HTTPException(409, str(e)) from e
+    return {"message": "Recording started", "recording": recording}
+
 
 @app.get("/pause-recording")
 def pause_recording():
-    spectre.pause()
-    return {"message": "Recording Paused"}
+    recording = spectre.pause()
+    if recording is None:
+        return {"message": "No recorder found"}
+    return {"message": "Recording paused", "recording": recording}
+
+
+@app.get("/stop-recording")
+def stop_recording():
+    recording = spectre.stop()
+    if recording is None:
+        return {"message": "No recorder found"}
+    return {"message": "Recording stopped", "recording": recording}
+
+
+@app.get("/recording")
+def recording_details():
+    details = spectre.details()
+    if details is None:
+        return {"message": "No recorder found"}
+    return details
 
 
 @app.get("/health")

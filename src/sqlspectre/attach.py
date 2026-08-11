@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -22,15 +23,32 @@ class SpectreHandle:
         eid = instrument_engine(engine, self.recorder, engine_id=engine_id)
         self.engines[eid] = engine
         return eid
-    
-    def start(self) -> None:
-        if self.recorder is not None:
-            self.recorder.start()
-    
-    def pause(self) -> None:
-        if self.recorder is not None:
-            self.recorder.pause()
-            
+
+    def get_recorder(self) -> Recorder | None:
+        return self.recorder
+
+    def start(self) -> dict[str, Any] | None:
+        """Start (or resume) recording. Raises RuntimeError if already running."""
+        if self.recorder is None:
+            return None
+        logging.info("Starting sqlspectre recording")
+        return self.recorder.start()
+
+    def pause(self) -> dict[str, Any] | None:
+        if self.recorder is None:
+            return None
+        return self.recorder.pause()
+
+    def stop(self) -> dict[str, Any] | None:
+        """Finalize the current recording and return its details."""
+        if self.recorder is None:
+            return None
+        return self.recorder.stop()
+
+    def details(self) -> dict[str, Any] | None:
+        if self.recorder is None:
+            return None
+        return self.recorder.details()
 
     def close(self) -> None:
         if self.recorder is not None:
@@ -56,12 +74,9 @@ def attach(
     enabled: bool | None = None,
 ) -> SpectreHandle:
     s = get_settings()
-    # attach kwargs override configure() defaults
     out = s.output if output is None else output
     on = s.enabled if enabled is None else enabled
-    output_format = s.output_format
-    max_buffer = s.max_buffer
-    flush_interval = s.flush_interval
+
     if not on:
         return SpectreHandle(None)
 
@@ -71,14 +86,20 @@ def attach(
 
     recorder = Recorder(
         output=out,
-        flush_interval=flush_interval,
-        max_buffer=max_buffer,
-        output_format=output_format,
-        
+        flush_interval=s.flush_interval,
+        max_buffer=s.max_buffer,
+        output_format=s.output_format,
     )
-    
+
     handle = SpectreHandle(recorder)
     for explicit_id, eng in pairs:
         handle.instrument(eng, engine_id=explicit_id)
     app.add_middleware(Middleware, recorder=recorder)
     return handle
+
+
+def get_recorder(app: Any) -> Recorder | None:
+    for middleware in app.user_middleware:
+        if isinstance(middleware, Middleware):
+            return middleware.recorder
+    return None
