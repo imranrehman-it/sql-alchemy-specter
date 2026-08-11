@@ -18,14 +18,49 @@ from sqlspectre.extract import (
     session_id,
 )
 from sqlspectre.recorder import Recorder
-from sqlspectre.rows import pool_summary, recording, request_params, routes
+from sqlspectre.rows import (
+    pool_summary,
+    recording,
+    request_params,
+    response_size,
+    response_timing,
+    routes,
+)
 from sqlspectre.util import new_id
+
+_json_encode_patched = False
+
+
+def _patch_json_encode() -> None:
+    global _json_encode_patched
+    if _json_encode_patched:
+        return
+    try:
+        from starlette.responses import JSONResponse
+    except Exception:
+        return
+
+    orig = JSONResponse.render
+
+    def render(self, content):  # type: ignore[no-untyped-def]
+        state = req_state_var.get()
+        if state is None:
+            return orig(self, content)
+        t0 = time.perf_counter()
+        try:
+            return orig(self, content)
+        finally:
+            state.encode_ms += (time.perf_counter() - t0) * 1000
+
+    JSONResponse.render = render  # type: ignore[method-assign]
+    _json_encode_patched = True
 
 
 class Middleware:
     def __init__(self, app: Callable, recorder: Recorder | None = None) -> None:
         self.app = app
         self.recorder = recorder
+        _patch_json_encode()
 
     async def __call__(self, scope: dict, receive: Callable, send: Callable) -> None:
         if scope["type"] != "http" or self.recorder is None:
@@ -44,6 +79,8 @@ class Middleware:
         req_token = req_state_var.set(state)
         status = 0
         t_response_start: float | None = None
+        t_response_end: float | None = None
+        response_body_len = 0
         body_buf = bytearray()
         body_truncated = False
 
@@ -64,10 +101,18 @@ class Middleware:
             return message
 
         async def send_wrapper(message: dict) -> None:
-            nonlocal status, t_response_start
+            nonlocal status, t_response_start, t_response_end, response_body_len
             if message["type"] == "http.response.start":
                 status = message["status"]
                 t_response_start = time.perf_counter()
+            elif message["type"] == "http.response.body":
+                try:
+                    response_body_len += len(message.get("body") or b"")
+                except Exception:
+                    pass
+                await send(message)
+                t_response_end = time.perf_counter()
+                return
             await send(message)
 
         try:
@@ -81,7 +126,9 @@ class Middleware:
                     time_call,
                     status,
                     t_response_start,
+                    t_response_end,
                     bytes(body_buf),
+                    response_body_len,
                     path,
                 )
             except Exception:
@@ -97,18 +144,27 @@ class Middleware:
         time_call: float,
         status: int,
         t_response_start: float | None,
+        t_response_end: float | None,
         body_bytes: bytes,
+        response_body_len: int,
         path: str,
     ) -> None:
         assert self.recorder is not None
         total_ms = (time.perf_counter() - state.t0) * 1000
-        pre_ms = (
+        ttfb_ms = (
             (t_response_start - state.t0) * 1000
             if t_response_start is not None
             else total_ms
         )
-        response_ms = max(0.0, total_ms - pre_ms)
-        process_ms = max(0.0, pre_ms - state.db_ms)
+        send_ms = (
+            (t_response_end - t_response_start) * 1000
+            if t_response_start is not None and t_response_end is not None
+            else 0.0
+        )
+        response_ms = max(0.0, total_ms - ttfb_ms)
+        # build = handler work before encode (excludes db + JSONResponse.render)
+        build_ms = max(0.0, ttfb_ms - state.db_ms - state.encode_ms)
+        process_ms = max(0.0, ttfb_ms - state.db_ms)
 
         query = query_params(scope.get("query_string") or b"")
         path_params = dict(scope.get("path_params") or {})
@@ -167,3 +223,19 @@ class Middleware:
                     total_ms=total_ms_r,
                 ),
             )
+        self.recorder.emit(
+            "response_size",
+            response_size(
+                request_id=request_id,
+                response_bytes=response_body_len,
+            ),
+        )
+        self.recorder.emit(
+            "response_timing",
+            response_timing(
+                request_id=request_id,
+                build_ms=round(build_ms, 3),
+                encode_ms=round(state.encode_ms, 3),
+                send_ms=round(send_ms, 3),
+            ),
+        )

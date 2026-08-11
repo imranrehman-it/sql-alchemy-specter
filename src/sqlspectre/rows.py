@@ -26,6 +26,32 @@ def recording(
     }
 
 
+def response_size(
+    *,
+    request_id: str,
+    response_bytes: int,
+) -> dict[str, Any]:
+    return {
+        "request_id": request_id,
+        "response_bytes": response_bytes,
+    }
+
+
+def response_timing(
+    *,
+    request_id: str,
+    build_ms: float,
+    encode_ms: float,
+    send_ms: float,
+) -> dict[str, Any]:
+    return {
+        "request_id": request_id,
+        "build_ms": build_ms,
+        "encode_ms": encode_ms,
+        "send_ms": send_ms,
+    }
+
+
 def request_params(
     *,
     request_id: str,

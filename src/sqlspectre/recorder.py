@@ -12,6 +12,8 @@ EVENT_FILES = (
     "recording",
     "request_params",
     "routes",
+    "response_size",
+    "response_timing",
     "queries",
     "pool_lifecycle",
     "pool_summary",
