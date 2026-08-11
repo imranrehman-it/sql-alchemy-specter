@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from sqlspectre.config import get_settings
 from sqlspectre.engine import instrument_engine
 from sqlspectre.middleware import Middleware
 from sqlspectre.recorder import Recorder
@@ -42,17 +43,26 @@ def attach(
     engine: Any = None,
     *,
     engines: Any = None,
-    output: str = "./spectate",
-    enabled: bool = True,
+    output: str | None = None,
+    enabled: bool | None = None,
 ) -> SpectreHandle:
-    if not enabled:
+    s = get_settings()
+    # attach kwargs override configure() defaults
+    out = s.output if output is None else output
+    on = s.enabled if enabled is None else enabled
+    if not on:
         return SpectreHandle(None)
 
     pairs = _as_pairs(engines) + _as_pairs(engine)
     if not pairs:
         raise TypeError("attach() requires at least one engine via engine= or engines=")
 
-    recorder = Recorder(output=output, flush_interval=10.0)
+    recorder = Recorder(
+        output=out,
+        flush_interval=s.flush_interval,
+        max_buffer=s.max_buffer,
+        output_format=s.output_format,
+    )
     handle = SpectreHandle(recorder)
     for explicit_id, eng in pairs:
         handle.instrument(eng, engine_id=explicit_id)
